@@ -13,7 +13,7 @@ end
 local StarterGui = game:GetService("StarterGui")
 
 StarterGui:SetCore("SendNotification", {
-    Title = "System Message",
+    Title = "WARNING (BY SORA HUB)",
     Text = messageText,
     Duration = 10,
     Button1 = "OK"
