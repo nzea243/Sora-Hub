@@ -1,3 +1,6 @@
+if not game:IsLoaded() then game.Loaded:Wait() end
+local getgenv = getgenv or function() return _G end
+
 local uis = game:GetService("UserInputService")
 local players = game:GetService("Players")
 local ws = game:GetService("Workspace")
@@ -33,7 +36,15 @@ local numseq = NumberSequence.new
 local numkey = NumberSequenceKeypoint.new
 
 local camera = ws.CurrentCamera
+while not camera do
+    ws:GetPropertyChangedSignal("CurrentCamera"):Wait()
+    camera = ws.CurrentCamera
+end
 local lp = players.LocalPlayer
+while not lp do
+    players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+    lp = players.LocalPlayer
+end
 local mouse = lp and lp:GetMouse() or nil
 local gui_offset = gui_service:GetGuiInset().Y
 
@@ -57,6 +68,38 @@ local remove = table.remove
 local concat = table.concat
 
 local is_mobile = uis.TouchEnabled and not uis.KeyboardEnabled
+
+-- Безопасный родитель для GUI: на многих мобильных executor'ах CoreGui недоступен
+local function get_gui_parent()
+    local ok, hui = pcall(function() return gethui and gethui() end)
+    if ok and typeof(hui) == "Instance" then
+        return hui
+    end
+
+    if not is_mobile then
+        local ok2 = pcall(function()
+            local t = Instance.new("Folder")
+            t.Parent = coregui
+            t:Destroy()
+        end)
+        if ok2 then
+            return coregui
+        end
+    end
+
+    return lp:WaitForChild("PlayerGui")
+end
+local gui_parent = get_gui_parent()
+
+local function protect(gui)
+    pcall(function()
+        if syn and syn.protect_gui then
+            syn.protect_gui(gui)
+        elseif protectgui then
+            protectgui(gui)
+        end
+    end)
+end
 local pc_size = dim2(0, 700, 0, 565)
 local mobile_size = dim2(0, 580, 0, 360)
 local defaultsize = is_mobile and mobile_size or pc_size
@@ -209,7 +252,12 @@ do
     local medium_asset
     local semibold_asset
 
-    pcall(function()
+    local can_custom_fonts = (not is_mobile)
+        and type(writefile) == "function"
+        and type(isfile) == "function"
+        and type(getcustomasset) == "function"
+
+    if can_custom_fonts then pcall(function()
         medium_asset = register_font("Medium", 200, "Normal", {
             Id = "Medium.ttf",
             Font = game:HttpGet("https://github.com/i77lhm/storage/raw/refs/heads/main/fonts/Inter_28pt-Medium.ttf"),
@@ -219,7 +267,7 @@ do
             Id = "SemiBold.ttf",
             Font = game:HttpGet("https://github.com/i77lhm/storage/raw/refs/heads/main/fonts/Inter_28pt-SemiBold.ttf"),
         })
-    end)
+    end) end
 
     fonts = {
         small = medium_asset and Font.new(medium_asset, Enum.FontWeight.Regular, Enum.FontStyle.Normal) or Font.fromEnum(Enum.Font.GothamMedium),
@@ -239,7 +287,7 @@ end
 
 if not library.cache then
     library.cache = library:create("Folder", {
-        Parent = coregui,
+        Parent = gui_parent,
         Name = "saynoware_cache",
     })
 end
@@ -541,33 +589,48 @@ function library:window(properties)
     }
 
     library[ "items" ] = library:create( "ScreenGui" , {
-        Parent = coregui,
         Name = "\0",
         Enabled = true,
+        ResetOnSpawn = false,
+        DisplayOrder = 999,
         ZIndexBehavior = Enum.ZIndexBehavior.Global,
         IgnoreGuiInset = true,
     })
+    protect(library[ "items" ])
+    library[ "items" ].Parent = gui_parent
 
     library[ "other" ] = library:create( "ScreenGui" , {
-        Parent = coregui,
         Name = "\0",
         Enabled = true,
+        ResetOnSpawn = false,
+        DisplayOrder = 1000,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
         IgnoreGuiInset = true,
     })
+    protect(library[ "other" ])
+    library[ "other" ].Parent = gui_parent
+
+    do
+        local vp = (workspace.CurrentCamera or camera).ViewportSize
+        if vp.X > 0 and vp.Y > 0 then
+            local w = min(cfg.size.X.Offset, vp.X - 16)
+            local h = min(cfg.size.Y.Offset, vp.Y - 16)
+            cfg.size = dim2(0, w, 0, h)
+        end
+    end
 
     local items = cfg.items
     do
+        local vp = (workspace.CurrentCamera or camera).ViewportSize
         items[ "main" ] = library:create( "Frame" , {
             Parent = library[ "items" ],
             Size = cfg.size,
             Name = "\0",
-            Position = dim2(0.5, -cfg.size.X.Offset / 2, 0.5, -cfg.size.Y.Offset / 2),
+            Position = dim2(0, max(0, floor((vp.X - cfg.size.X.Offset) / 2)), 0, max(0, floor((vp.Y - cfg.size.Y.Offset) / 2))),
             BorderColor3 = rgb(0, 0, 0),
             BorderSizePixel = 0,
             BackgroundColor3 = rgb(10, 10, 10),
         })
-        items[ "main" ].Position = dim2(0, items[ "main" ].AbsolutePosition.X, 0, items[ "main" ].AbsolutePosition.Y)
 
         library:create( "UICorner" , {
             Parent = items[ "main" ],
