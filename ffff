@@ -733,7 +733,7 @@ function library:window(properties)
         })
 
         items[ "profile_subtitle" ] = library:create( "TextLabel" , {
-            FontFace = Font.fromEnum(Enum.Font.GothamBold),
+            FontFace = Font.fromEnum(Enum.Font.GothamMedium),
             TextColor3 = rgb(140, 140, 140),
             Text = "t.me/SaynoHub",
             Parent = items[ "profile_frame" ],
@@ -1507,7 +1507,7 @@ function library:tab(properties)
             function data.open_page()
                 local current = cfg.current_multi
 
-                if current and current ~= data and not cfg.flat_pages then
+                if current and current ~= data then
                     if self.items[ "global_fade" ] then
                         self.items[ "global_fade" ].BackgroundTransparency = 0
                         library:tween(self.items[ "global_fade" ], {BackgroundTransparency = 1}, Enum.EasingStyle.Quad, 0.25)
@@ -1526,9 +1526,7 @@ function library:tab(properties)
             cfg.pages[#cfg.pages + 1] = setmetatable(data, library)
         end
 
-        cfg.flat_pages = not (properties.subtabs or properties.Subtabs or properties.sub_tabs)
-
-        if #cfg.pages > 1 and not cfg.flat_pages then
+        if #cfg.pages > 1 then
             local sub_buttons = {}
 
             for _, pg in ipairs(cfg.pages) do
@@ -1594,11 +1592,6 @@ function library:tab(properties)
 
         if #cfg.pages > 0 then
             cfg.pages[1].open_page()
-            if cfg.flat_pages then
-                for _, pg in ipairs(cfg.pages) do
-                    pg.page.Visible = true
-                end
-            end
         end
     end
 
