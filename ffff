@@ -335,9 +335,25 @@ function library:draggify(frame, options)
     local drag_input = nil
     local moved = false
     local start_cursor = nil
-    local frame_start_pos = nil
+    local start_pos_x = 0
+    local start_pos_y = 0
 
     frame.Active = true
+
+    local function get_parent_size()
+        local parent = frame.Parent
+        if parent and (parent:IsA("GuiObject") or parent:IsA("ScreenGui") or parent:IsA("GuiBase2d")) then
+            local size = parent.AbsoluteSize
+            if size.X > 0 and size.Y > 0 then
+                return size
+            end
+        end
+        local current_cam = ws.CurrentCamera or camera
+        if current_cam and current_cam.ViewportSize.X > 0 and current_cam.ViewportSize.Y > 0 then
+            return current_cam.ViewportSize
+        end
+        return vec2(1920, 1080)
+    end
 
     local function get_cursor_pos(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseMovement then
@@ -355,11 +371,14 @@ function library:draggify(frame, options)
     frame.InputBegan:Connect(function(input)
         if not is_press(input) or dragging then return end
 
+        local parent_size = get_parent_size()
+
         dragging = true
         moved = false
         drag_input = input
         start_cursor = get_cursor_pos(input)
-        frame_start_pos = vec2(frame.AbsolutePosition.X, frame.AbsolutePosition.Y)
+        start_pos_x = frame.Position.X.Scale * parent_size.X + frame.Position.X.Offset
+        start_pos_y = frame.Position.Y.Scale * parent_size.Y + frame.Position.Y.Offset
 
         local connection
         connection = input.Changed:Connect(function()
@@ -398,12 +417,14 @@ function library:draggify(frame, options)
             if close_on_drag then library:close_element() end
         end
 
-        local current_cam = ws.CurrentCamera or camera
-        local viewport = current_cam and current_cam.ViewportSize or vec2(1920, 1080)
+        local parent_size = get_parent_size()
         local size = frame.AbsoluteSize
 
-        local new_x = clamp(frame_start_pos.X + delta.X, 0, max(viewport.X - size.X, 0))
-        local new_y = clamp(frame_start_pos.Y + delta.Y, 0, max(viewport.Y - size.Y, 0))
+        local max_x = max(parent_size.X - size.X, 0)
+        local max_y = max(parent_size.Y - size.Y, 0)
+
+        local new_x = clamp(start_pos_x + delta.X, 0, max_x)
+        local new_y = clamp(start_pos_y + delta.Y, 0, max_y)
 
         frame.Position = dim2(0, new_x, 0, new_y)
     end)
