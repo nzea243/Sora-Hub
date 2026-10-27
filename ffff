@@ -223,8 +223,14 @@ function library:create(instance, options)
         ins.Transparency = 0.5
     end
 
+    local parent = options.Parent
     for prop, value in options do
-        ins[prop] = value
+        if prop ~= "Parent" then
+            ins[prop] = value
+        end
+    end
+    if parent then
+        ins.Parent = parent
     end
 
     return ins
@@ -264,8 +270,8 @@ function library:resizify(frame)
     frame_btn.InputBegan:Connect(function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1 then
             resizing = true
-            start = input.Position
-            start_size = frame.Size
+            start = uis:GetMouseLocation()
+            start_size = frame.AbsoluteSize
         end
     end)
 
@@ -277,21 +283,22 @@ function library:resizify(frame)
 
     library:connection(uis.InputChanged, function(input)
         if resizing and input.UserInputType == Enum.UserInputType.MouseMovement then
-            local viewport_x = camera.ViewportSize.X
-            local viewport_y = camera.ViewportSize.Y
+            local current_cam = ws.CurrentCamera or camera
+            local viewport = current_cam and current_cam.ViewportSize or vec2(1920, 1080)
+            local mouse_pos = uis:GetMouseLocation()
 
             local current_size = dim2(
-                start_size.X.Scale,
+                0,
                 clamp(
-                    start_size.X.Offset + (input.Position.X - start.X),
+                    start_size.X + (mouse_pos.X - start.X),
                     og_size.X.Offset,
-                    viewport_x
+                    viewport.X
                 ),
-                start_size.Y.Scale,
+                0,
                 clamp(
-                    start_size.Y.Offset + (input.Position.Y - start.Y),
+                    start_size.Y + (mouse_pos.Y - start.Y),
                     og_size.Y.Offset,
-                    viewport_y
+                    viewport.Y
                 )
             )
 
@@ -327,10 +334,18 @@ function library:draggify(frame, options)
     local dragging = false
     local drag_input = nil
     local moved = false
-    local start = nil
-    local start_pos = nil
+    local start_cursor = nil
+    local frame_start_pos = nil
 
     frame.Active = true
+
+    local function get_cursor_pos(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseMovement then
+            return uis:GetMouseLocation()
+        else
+            return vec2(input.Position.X, input.Position.Y)
+        end
+    end
 
     local function is_press(input)
         return input.UserInputType == Enum.UserInputType.MouseButton1
@@ -343,15 +358,25 @@ function library:draggify(frame, options)
         dragging = true
         moved = false
         drag_input = input
-        start = input.Position
-        -- Берем реальные пиксельные координаты на экране (AbsolutePosition), 
-        -- чтобы элемент не телепортировался из-за Scale (например, 0.5 по Y)
-        start_pos = frame.AbsolutePosition
+        start_cursor = get_cursor_pos(input)
+        frame_start_pos = vec2(frame.AbsolutePosition.X, frame.AbsolutePosition.Y)
+
+        local connection
+        connection = input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End or input.UserInputState == Enum.UserInputState.Cancel then
+                dragging = false
+                drag_input = nil
+                if connection then
+                    connection:Disconnect()
+                    connection = nil
+                end
+            end
+        end)
     end)
 
     library:connection(uis.InputEnded, function(input)
         if not dragging then return end
-        if input == drag_input or (input.UserInputType == Enum.UserInputType.MouseButton1 and drag_input.UserInputType == Enum.UserInputType.MouseButton1) then
+        if input == drag_input or (input.UserInputType == Enum.UserInputType.MouseButton1 and drag_input and drag_input.UserInputType == Enum.UserInputType.MouseButton1) then
             dragging = false
             drag_input = nil
         end
@@ -364,23 +389,21 @@ function library:draggify(frame, options)
         local is_touch = input.UserInputType == Enum.UserInputType.Touch and input == drag_input
         if not (is_mouse or is_touch) then return end
 
-        local delta = input.Position - start
+        local current_cursor = get_cursor_pos(input)
+        local delta = current_cursor - start_cursor
+
         if not moved then
-            if vec2(delta.X, delta.Y).Magnitude < threshold then return end
+            if delta.Magnitude < threshold then return end
             moved = true
             if close_on_drag then library:close_element() end
-            -- Фиксируем точку старта в момент начала реального сдвига, чтобы не было скачка на длину threshold
-            start_pos = frame.AbsolutePosition
-            start = input.Position
-            delta = vec3(0, 0, 0)
         end
 
-        local viewport = camera.ViewportSize
+        local current_cam = ws.CurrentCamera or camera
+        local viewport = current_cam and current_cam.ViewportSize or vec2(1920, 1080)
         local size = frame.AbsoluteSize
-        local anchor = frame.AnchorPoint
 
-        local new_x = clamp(start_pos.X + delta.X, 0, max(viewport.X - size.X, 0)) + (size.X * anchor.X)
-        local new_y = clamp(start_pos.Y + delta.Y, 0, max(viewport.Y - size.Y, 0)) + (size.Y * anchor.Y)
+        local new_x = clamp(frame_start_pos.X + delta.X, 0, max(viewport.X - size.X, 0))
+        local new_y = clamp(frame_start_pos.Y + delta.Y, 0, max(viewport.Y - size.Y, 0))
 
         frame.Position = dim2(0, new_x, 0, new_y)
     end)
@@ -662,7 +685,6 @@ function library:window(properties)
             BorderSizePixel = 0,
             BackgroundColor3 = rgb(10, 10, 10),
         })
-        items[ "main" ].Position = dim2(0, items[ "main" ].AbsolutePosition.X, 0, items[ "main" ].AbsolutePosition.Y)
 
         library:create( "UICorner" , {
             Parent = items[ "main" ],
