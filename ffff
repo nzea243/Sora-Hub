@@ -219,7 +219,6 @@ end
 function library:create(instance, options)
     local ins = Instance.new(instance)
 
-    -- every UIStroke (outline) in the GUI is 50% transparent unless set explicitly
     if instance == "UIStroke" and options.Transparency == nil then
         ins.Transparency = 0.5
     end
@@ -329,7 +328,7 @@ function library:draggify(frame, options)
     local drag_input = nil
     local moved = false
     local start = nil
-    local start_pos = frame.Position
+    local start_pos = nil
 
     frame.Active = true
 
@@ -345,10 +344,11 @@ function library:draggify(frame, options)
         moved = false
         drag_input = input
         start = input.Position
-        start_pos = frame.Position
+        -- Берем реальные пиксельные координаты на экране (AbsolutePosition), 
+        -- чтобы элемент не телепортировался из-за Scale (например, 0.5 по Y)
+        start_pos = frame.AbsolutePosition
     end)
 
-    -- global release: finger/mouse can leave the frame while dragging
     library:connection(uis.InputEnded, function(input)
         if not dragging then return end
         if input == drag_input or (input.UserInputType == Enum.UserInputType.MouseButton1 and drag_input.UserInputType == Enum.UserInputType.MouseButton1) then
@@ -369,16 +369,20 @@ function library:draggify(frame, options)
             if vec2(delta.X, delta.Y).Magnitude < threshold then return end
             moved = true
             if close_on_drag then library:close_element() end
+            -- Фиксируем точку старта в момент начала реального сдвига, чтобы не было скачка на длину threshold
+            start_pos = frame.AbsolutePosition
+            start = input.Position
+            delta = vec3(0, 0, 0)
         end
 
         local viewport = camera.ViewportSize
         local size = frame.AbsoluteSize
+        local anchor = frame.AnchorPoint
 
-        -- direct assignment, no tween: follows the finger 1:1
-        frame.Position = dim2(
-            0, clamp(start_pos.X.Offset + delta.X, 0, max(viewport.X - size.X, 0)),
-            0, clamp(start_pos.Y.Offset + delta.Y, 0, max(viewport.Y - size.Y, 0))
-        )
+        local new_x = clamp(start_pos.X + delta.X, 0, max(viewport.X - size.X, 0)) + (size.X * anchor.X)
+        local new_y = clamp(start_pos.Y + delta.Y, 0, max(viewport.Y - size.Y, 0)) + (size.Y * anchor.Y)
+
+        frame.Position = dim2(0, new_x, 0, new_y)
     end)
 
     return {
@@ -530,7 +534,6 @@ end
 function library:highlight(el)
     if not el or not el.Parent then return end
 
-    -- remove previous highlight on the same element
     for _, child in el:GetChildren() do
         if child:GetAttribute("sw_highlight") then
             child:Destroy()
@@ -541,8 +544,6 @@ function library:highlight(el)
     local radius = corner and corner.CornerRadius or dim(0, 6)
     local accent = themes.preset.accent
 
-    -- soft glow: lives in the ScreenGui (not inside the element) so it can't break
-    -- the element's UIListLayout, and follows the element while it is on screen
     local glow = library:create("Frame", {
         Name = "\0",
         Parent = library[ "items" ],
@@ -566,7 +567,6 @@ function library:highlight(el)
         glow.Size = dim2(0, el.AbsoluteSize.X, 0, el.AbsoluteSize.Y)
     end)
 
-    -- animated border: gradient "beam" that runs around the outline
     local stroke = library:create("UIStroke", {
         Color = accent,
         Thickness = 0,
@@ -583,19 +583,16 @@ function library:highlight(el)
         Parent = stroke,
     })
 
-    -- appear
     library:tween(stroke, {Thickness = 2}, Enum.EasingStyle.Quad, 0.2)
     library:tween(glow, {BackgroundTransparency = 0.86}, Enum.EasingStyle.Quad, 0.2)
     library:tween(beam, {Rotation = 360}, Enum.EasingStyle.Linear, 1.4)
 
-    -- pulse the glow once while the beam runs
     task.delay(0.35, function()
         if glow and glow.Parent then
             library:tween(glow, {BackgroundTransparency = 0.94}, Enum.EasingStyle.Sine, 0.4)
         end
     end)
 
-    -- disappear
     task.delay(1.4, function()
         if stroke and stroke.Parent then
             library:tween(stroke, {Transparency = 1, Thickness = 0}, Enum.EasingStyle.Quad, 0.4)
@@ -735,7 +732,7 @@ function library:window(properties)
             TextColor3 = themes.preset.accent,
             BorderSizePixel = 0,
             RichText = true,
-            TextSize = is_mobile and 24 or 42,
+            TextSize = is_mobile and 20 or 34,
             BackgroundColor3 = rgb(255, 255, 255),
         })
         library:apply_theme(items[ "title" ], "accent", "TextColor3")
@@ -950,8 +947,8 @@ function library:window(properties)
             Image = "rbxassetid://103166125443674",
             BackgroundColor3 = rgb(15, 15, 15),
             Visible = false,
-            Size = dim2(0, 54, 0, 54),
-            Position = dim2(0, 20, 0, 20),
+            Size = dim2(0, 58, 0, 58),
+            Position = dim2(0, 20, 0.5, -29),
             ZIndex = 100,
             AutoButtonColor = false,
         })
@@ -961,8 +958,8 @@ function library:window(properties)
         })
         library:create( "UIStroke" , {
             Color = rgb(0, 0, 0),
-            Thickness = 2,
-            Transparency = 0.5,
+            Thickness = 1,
+            Transparency = 0.8,
             Parent = items[ "hidden_icon" ],
             ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
         })
@@ -1295,7 +1292,6 @@ function library:window(properties)
     end)
 
     items[ "hidden_icon" ].Activated:Connect(function()
-        -- a drag must not be treated as a tap
         if items[ "hidden_icon_drag" ].was_moved() then return end
         items[ "main" ].Visible = true
         items[ "hidden_icon" ].Visible = false
@@ -1797,7 +1793,6 @@ function library:section(properties)
             BackgroundColor3 = rgb(45, 45, 45),
         })
 
-        -- section header switch removed on purpose; kept as no-op so old calls don't break
         function cfg.toggle_section(bool)
             cfg.default = bool and true or false
         end
