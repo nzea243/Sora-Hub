@@ -1,6 +1,3 @@
-if not game:IsLoaded() then game.Loaded:Wait() end
-local getgenv = getgenv or function() return _G end
-
 local uis = game:GetService("UserInputService")
 local players = game:GetService("Players")
 local ws = game:GetService("Workspace")
@@ -36,16 +33,8 @@ local numseq = NumberSequence.new
 local numkey = NumberSequenceKeypoint.new
 
 local camera = ws.CurrentCamera
-while not camera do
-    ws:GetPropertyChangedSignal("CurrentCamera"):Wait()
-    camera = ws.CurrentCamera
-end
 local lp = players.LocalPlayer
-while not lp do
-    players:GetPropertyChangedSignal("LocalPlayer"):Wait()
-    lp = players.LocalPlayer
-end
-local mouse = lp and lp:GetMouse() or nil
+local mouse = lp:GetMouse()
 local gui_offset = gui_service:GetGuiInset().Y
 
 local max = math.max
@@ -69,44 +58,6 @@ local concat = table.concat
 
 local is_mobile = uis.TouchEnabled and not uis.KeyboardEnabled
 
--- Безопасный родитель для GUI: на многих мобильных executor'ах CoreGui недоступен
-local function get_gui_parent()
-    local ok, hui = pcall(function() return gethui and gethui() end)
-    if ok and typeof(hui) == "Instance" then
-        return hui
-    end
-
-    if not is_mobile then
-        local ok2 = pcall(function()
-            local t = Instance.new("Folder")
-            t.Parent = coregui
-            t:Destroy()
-        end)
-        if ok2 then
-            return coregui
-        end
-    end
-
-    return lp:WaitForChild("PlayerGui")
-end
-local gui_parent = get_gui_parent()
-
-local function protect(gui)
-    pcall(function()
-        if syn and syn.protect_gui then
-            syn.protect_gui(gui)
-        elseif protectgui then
-            protectgui(gui)
-        end
-    end)
-end
-local pc_size = dim2(0, 700, 0, 565)
-local mobile_size = dim2(0, 580, 0, 360)
-local defaultsize = is_mobile and mobile_size or pc_size
-
-getgenv().is_mobile = is_mobile
-getgenv().defaultsize = defaultsize
-
 getgenv().library = {
     directory = "saynoware",
     folders = {
@@ -121,11 +72,6 @@ getgenv().library = {
     search_registry = {},
     hidden = false,
     cache = nil,
-    is_mobile = is_mobile,
-    pc_size = pc_size,
-    mobile_size = mobile_size,
-    defaultsize = defaultsize,
-    default_size = defaultsize,
 }
 
 local themes = {
@@ -252,12 +198,7 @@ do
     local medium_asset
     local semibold_asset
 
-    local can_custom_fonts = (not is_mobile)
-        and type(writefile) == "function"
-        and type(isfile) == "function"
-        and type(getcustomasset) == "function"
-
-    if can_custom_fonts then pcall(function()
+    pcall(function()
         medium_asset = register_font("Medium", 200, "Normal", {
             Id = "Medium.ttf",
             Font = game:HttpGet("https://github.com/i77lhm/storage/raw/refs/heads/main/fonts/Inter_28pt-Medium.ttf"),
@@ -267,7 +208,7 @@ do
             Id = "SemiBold.ttf",
             Font = game:HttpGet("https://github.com/i77lhm/storage/raw/refs/heads/main/fonts/Inter_28pt-SemiBold.ttf"),
         })
-    end) end
+    end)
 
     fonts = {
         small = medium_asset and Font.new(medium_asset, Enum.FontWeight.Regular, Enum.FontStyle.Normal) or Font.fromEnum(Enum.Font.GothamMedium),
@@ -278,6 +219,11 @@ end
 function library:create(instance, options)
     local ins = Instance.new(instance)
 
+    -- every UIStroke (outline) in the GUI is 50% transparent unless set explicitly
+    if instance == "UIStroke" and options.Transparency == nil then
+        ins.Transparency = 0.5
+    end
+
     for prop, value in options do
         ins[prop] = value
     end
@@ -287,7 +233,7 @@ end
 
 if not library.cache then
     library.cache = library:create("Folder", {
-        Parent = gui_parent,
+        Parent = coregui,
         Name = "saynoware_cache",
     })
 end
@@ -369,55 +315,75 @@ function library:next_flag()
 end
 
 function library:mouse_in_frame(uiobject)
-    if not mouse then return false end
     local y_cond = uiobject.AbsolutePosition.Y <= mouse.Y and mouse.Y <= uiobject.AbsolutePosition.Y + uiobject.AbsoluteSize.Y
     local x_cond = uiobject.AbsolutePosition.X <= mouse.X and mouse.X <= uiobject.AbsolutePosition.X + uiobject.AbsoluteSize.X
     return (y_cond and x_cond)
 end
 
-function library:draggify(frame)
+function library:draggify(frame, options)
+    options = options or {}
+    local threshold = options.threshold or 0
+    local close_on_drag = options.close_on_drag ~= false
+
     local dragging = false
+    local drag_input = nil
+    local moved = false
+    local start = nil
     local start_pos = frame.Position
-    local start
+
+    frame.Active = true
+
+    local function is_press(input)
+        return input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch
+    end
 
     frame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            start = input.Position
-            start_pos = frame.Position
-        end
+        if not is_press(input) or dragging then return end
+
+        dragging = true
+        moved = false
+        drag_input = input
+        start = input.Position
+        start_pos = frame.Position
     end)
 
-    frame.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+    -- global release: finger/mouse can leave the frame while dragging
+    library:connection(uis.InputEnded, function(input)
+        if not dragging then return end
+        if input == drag_input or (input.UserInputType == Enum.UserInputType.MouseButton1 and drag_input.UserInputType == Enum.UserInputType.MouseButton1) then
             dragging = false
+            drag_input = nil
         end
     end)
 
     library:connection(uis.InputChanged, function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local viewport_x = camera.ViewportSize.X
-            local viewport_y = camera.ViewportSize.Y
+        if not dragging then return end
 
-            local current_position = dim2(
-                0,
-                clamp(
-                    start_pos.X.Offset + (input.Position.X - start.X),
-                    0,
-                    viewport_x - frame.Size.X.Offset
-                ),
-                0,
-                clamp(
-                    start_pos.Y.Offset + (input.Position.Y - start.Y),
-                    0,
-                    viewport_y - frame.Size.Y.Offset
-                )
-            )
+        local is_mouse = input.UserInputType == Enum.UserInputType.MouseMovement
+        local is_touch = input.UserInputType == Enum.UserInputType.Touch and input == drag_input
+        if not (is_mouse or is_touch) then return end
 
-            library:tween(frame, {Position = current_position}, Enum.EasingStyle.Linear, 0.05)
-            library:close_element()
+        local delta = input.Position - start
+        if not moved then
+            if vec2(delta.X, delta.Y).Magnitude < threshold then return end
+            moved = true
+            if close_on_drag then library:close_element() end
         end
+
+        local viewport = camera.ViewportSize
+        local size = frame.AbsoluteSize
+
+        -- direct assignment, no tween: follows the finger 1:1
+        frame.Position = dim2(
+            0, clamp(start_pos.X.Offset + delta.X, 0, max(viewport.X - size.X, 0)),
+            0, clamp(start_pos.Y.Offset + delta.Y, 0, max(viewport.Y - size.Y, 0))
+        )
     end)
+
+    return {
+        was_moved = function() return moved end,
+    }
 end
 
 function library:convert(str)
@@ -561,6 +527,90 @@ function library:unload_menu()
     library = nil
 end
 
+function library:highlight(el)
+    if not el or not el.Parent then return end
+
+    -- remove previous highlight on the same element
+    for _, child in el:GetChildren() do
+        if child:GetAttribute("sw_highlight") then
+            child:Destroy()
+        end
+    end
+
+    local corner = el:FindFirstChildOfClass("UICorner")
+    local radius = corner and corner.CornerRadius or dim(0, 6)
+    local accent = themes.preset.accent
+
+    -- soft glow: lives in the ScreenGui (not inside the element) so it can't break
+    -- the element's UIListLayout, and follows the element while it is on screen
+    local glow = library:create("Frame", {
+        Name = "\0",
+        Parent = library[ "items" ],
+        Size = dim2(0, el.AbsoluteSize.X, 0, el.AbsoluteSize.Y),
+        Position = dim2(0, el.AbsolutePosition.X, 0, el.AbsolutePosition.Y),
+        BorderSizePixel = 0,
+        BackgroundColor3 = accent,
+        BackgroundTransparency = 1,
+        ZIndex = 20,
+        Active = false,
+    })
+    library:create("UICorner", {Parent = glow, CornerRadius = radius})
+
+    local follow
+    follow = run.RenderStepped:Connect(function()
+        if not (el and el.Parent and glow and glow.Parent) then
+            if follow then follow:Disconnect() end
+            return
+        end
+        glow.Position = dim2(0, el.AbsolutePosition.X, 0, el.AbsolutePosition.Y)
+        glow.Size = dim2(0, el.AbsoluteSize.X, 0, el.AbsoluteSize.Y)
+    end)
+
+    -- animated border: gradient "beam" that runs around the outline
+    local stroke = library:create("UIStroke", {
+        Color = accent,
+        Thickness = 0,
+        Transparency = 0.15,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        Parent = el,
+    })
+    stroke:SetAttribute("sw_highlight", true)
+
+    local beam = library:create("UIGradient", {
+        Color = rgbseq{rgbkey(0, accent), rgbkey(0.5, rgb(255, 255, 255)), rgbkey(1, accent)},
+        Transparency = numseq{numkey(0, 0.7), numkey(0.5, 0), numkey(1, 0.7)},
+        Rotation = 0,
+        Parent = stroke,
+    })
+
+    -- appear
+    library:tween(stroke, {Thickness = 2}, Enum.EasingStyle.Quad, 0.2)
+    library:tween(glow, {BackgroundTransparency = 0.86}, Enum.EasingStyle.Quad, 0.2)
+    library:tween(beam, {Rotation = 360}, Enum.EasingStyle.Linear, 1.4)
+
+    -- pulse the glow once while the beam runs
+    task.delay(0.35, function()
+        if glow and glow.Parent then
+            library:tween(glow, {BackgroundTransparency = 0.94}, Enum.EasingStyle.Sine, 0.4)
+        end
+    end)
+
+    -- disappear
+    task.delay(1.4, function()
+        if stroke and stroke.Parent then
+            library:tween(stroke, {Transparency = 1, Thickness = 0}, Enum.EasingStyle.Quad, 0.4)
+        end
+        if glow and glow.Parent then
+            library:tween(glow, {BackgroundTransparency = 1}, Enum.EasingStyle.Quad, 0.4)
+        end
+        task.delay(0.45, function()
+            if follow then follow:Disconnect() end
+            if stroke then stroke:Destroy() end
+            if glow then glow:Destroy() end
+        end)
+    end)
+end
+
 function library:register_search_entry(name, tab, page, element, path_text)
     if not name or name == "" then return end
     insert(library.search_registry, {
@@ -582,55 +632,40 @@ function library:window(properties)
         suffix = properties.suffix or properties.Suffix or "ware",
         name = properties.name or properties.Name or "Sayno",
         game_name = properties.gameInfo or properties.game_info or properties.GameInfo or "SaynoWare",
-        size = properties.size or properties.Size or defaultsize,
+        size = properties.size or properties.Size or dim2(0, is_mobile and 620 or 700, 0, is_mobile and 380 or 565),
         show_search = show_search,
         selected_tab = nil,
         items = {},
     }
 
     library[ "items" ] = library:create( "ScreenGui" , {
+        Parent = coregui,
         Name = "\0",
         Enabled = true,
-        ResetOnSpawn = false,
-        DisplayOrder = 999,
         ZIndexBehavior = Enum.ZIndexBehavior.Global,
         IgnoreGuiInset = true,
     })
-    protect(library[ "items" ])
-    library[ "items" ].Parent = gui_parent
 
     library[ "other" ] = library:create( "ScreenGui" , {
+        Parent = coregui,
         Name = "\0",
         Enabled = true,
-        ResetOnSpawn = false,
-        DisplayOrder = 1000,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
         IgnoreGuiInset = true,
     })
-    protect(library[ "other" ])
-    library[ "other" ].Parent = gui_parent
-
-    do
-        local vp = (workspace.CurrentCamera or camera).ViewportSize
-        if vp.X > 0 and vp.Y > 0 then
-            local w = min(cfg.size.X.Offset, vp.X - 16)
-            local h = min(cfg.size.Y.Offset, vp.Y - 16)
-            cfg.size = dim2(0, w, 0, h)
-        end
-    end
 
     local items = cfg.items
     do
-        local vp = (workspace.CurrentCamera or camera).ViewportSize
         items[ "main" ] = library:create( "Frame" , {
             Parent = library[ "items" ],
             Size = cfg.size,
             Name = "\0",
-            Position = dim2(0, max(0, floor((vp.X - cfg.size.X.Offset) / 2)), 0, max(0, floor((vp.Y - cfg.size.Y.Offset) / 2))),
+            Position = dim2(0.5, -cfg.size.X.Offset / 2, 0.5, -cfg.size.Y.Offset / 2),
             BorderColor3 = rgb(0, 0, 0),
             BorderSizePixel = 0,
             BackgroundColor3 = rgb(10, 10, 10),
         })
+        items[ "main" ].Position = dim2(0, items[ "main" ].AbsolutePosition.X, 0, items[ "main" ].AbsolutePosition.Y)
 
         library:create( "UICorner" , {
             Parent = items[ "main" ],
@@ -648,7 +683,7 @@ function library:window(properties)
             BackgroundTransparency = 1,
             Name = "\0",
             BorderColor3 = rgb(0, 0, 0),
-            Size = dim2(0, is_mobile and 125 or 196, 1, 0),
+            Size = dim2(0, is_mobile and 115 or 196, 1, 0),
             BorderSizePixel = 0,
             BackgroundColor3 = rgb(10, 10, 10),
         })
@@ -663,32 +698,15 @@ function library:window(properties)
             BackgroundColor3 = rgb(25, 25, 25),
         })
 
-        items[ "title" ] = library:create( "TextLabel" , {
-            FontFace = fonts.font,
-            BorderColor3 = rgb(0, 0, 0),
-            Parent = items[ "side_frame" ],
-            Name = "\0",
-            Text = string.format('%s<font color = "rgb(255, 255, 255)">%s</font>', cfg.name, cfg.suffix),
-            BackgroundTransparency = 1,
-            Size = dim2(1, 0, 0, is_mobile and 54 or 74),
-            TextColor3 = themes.preset.accent,
-            BorderSizePixel = 0,
-            RichText = true,
-            TextSize = is_mobile and 22 or 36,
-            BackgroundColor3 = rgb(255, 255, 255),
-        })
-        library:apply_theme(items[ "title" ], "accent", "TextColor3")
-
         items[ "button_holder" ] = library:create( "Frame" , {
             Parent = items[ "side_frame" ],
             Name = "\0",
             BackgroundTransparency = 1,
-            Position = dim2(0, 0, 0, is_mobile and 54 or 74),
+            Position = dim2(0, 0, 0, is_mobile and 55 or 70),
             BorderColor3 = rgb(0, 0, 0),
-            Size = dim2(1, 0, 1, is_mobile and -(54 + 50) or -(74 + 60)),
+            Size = dim2(1, 0, 1, is_mobile and -55 or -70),
             BorderSizePixel = 0,
             BackgroundColor3 = rgb(255, 255, 255),
-            ClipsDescendants = true,
         })
         cfg.button_holder = items[ "button_holder" ]
 
@@ -699,123 +717,36 @@ function library:window(properties)
         })
 
         library:create( "UIPadding" , {
-            PaddingTop = dim(0, is_mobile and 6 or 12),
-            PaddingBottom = dim(0, is_mobile and 8 or 14),
+            PaddingTop = dim(0, is_mobile and 8 or 16),
+            PaddingBottom = dim(0, is_mobile and 16 or 36),
             Parent = items[ "button_holder" ],
             PaddingRight = dim(0, is_mobile and 5 or 11),
             PaddingLeft = dim(0, is_mobile and 5 or 10),
         })
 
-        items[ "profile_frame" ] = library:create( "Frame" , {
-            AnchorPoint = vec2(0, 1),
+        items[ "title" ] = library:create( "TextLabel" , {
+            FontFace = fonts.font,
+            BorderColor3 = rgb(0, 0, 0),
             Parent = items[ "side_frame" ],
             Name = "\0",
-            Position = dim2(0, 0, 1, 0),
-            Size = dim2(1, 0, 0, is_mobile and 50 or 60),
-            BorderSizePixel = 0,
-            BackgroundColor3 = rgb(12, 12, 12),
-            BackgroundTransparency = 0,
-        })
-
-        library:create( "UICorner" , {
-            Parent = items[ "profile_frame" ],
-            CornerRadius = dim(0, 10),
-        })
-
-        library:create( "Frame" , {
-            Parent = items[ "profile_frame" ],
-            Position = dim2(0, 0, 0, 0),
-            Size = dim2(1, 0, 0, 10),
-            BorderSizePixel = 0,
-            BackgroundColor3 = rgb(12, 12, 12),
-        })
-
-        library:create( "Frame" , {
-            AnchorPoint = vec2(1, 1),
-            Parent = items[ "profile_frame" ],
-            Position = dim2(1, 0, 1, 0),
-            Size = dim2(0, 10, 0, 10),
-            BorderSizePixel = 0,
-            BackgroundColor3 = rgb(12, 12, 12),
-        })
-
-        library:create( "Frame" , {
-            Parent = items[ "profile_frame" ],
-            Position = dim2(0, 0, 0, 0),
-            Size = dim2(1, 0, 0, 1),
-            BorderSizePixel = 0,
-            BackgroundColor3 = rgb(25, 25, 25),
-        })
-
-        library:create( "Frame" , {
-            AnchorPoint = vec2(1, 0),
-            Parent = items[ "profile_frame" ],
-            Position = dim2(1, 0, 0, 0),
-            Size = dim2(0, 1, 1, 0),
-            BorderSizePixel = 0,
-            BackgroundColor3 = rgb(25, 25, 25),
-        })
-
-        local user_id = lp and lp.UserId or 0
-        local display_name = lp and lp.DisplayName or "Player"
-        local avatar_url = string.format("rbxthumb://type=AvatarHeadShot&id=%s&w=48&h=48", tostring(user_id))
-
-        items[ "profile_avatar" ] = library:create( "ImageLabel" , {
-            Parent = items[ "profile_frame" ],
-            AnchorPoint = vec2(0, 0.5),
-            Position = dim2(0, is_mobile and 8 or 12, 0.5, 0),
-            Size = dim2(0, is_mobile and 32 or 38, 0, is_mobile and 32 or 38),
-            BackgroundColor3 = rgb(20, 20, 20),
-            BorderSizePixel = 0,
-            Image = avatar_url,
-        })
-
-        library:create( "UICorner" , {
-            Parent = items[ "profile_avatar" ],
-            CornerRadius = dim(0, 999),
-        })
-
-        library:create( "UIStroke" , {
-            Color = rgb(38, 38, 38),
-            Parent = items[ "profile_avatar" ],
-            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-        })
-
-        items[ "profile_name" ] = library:create( "TextLabel" , {
-            FontFace = Font.fromEnum(Enum.Font.GothamBold),
-            TextColor3 = rgb(240, 240, 240),
-            Text = display_name,
-            Parent = items[ "profile_frame" ],
+            Text = string.format('%s<font color = "rgb(255, 255, 255)">%s</font>', cfg.name, cfg.suffix),
             BackgroundTransparency = 1,
-            Position = dim2(0, is_mobile and 46 or 58, 0, is_mobile and 9 or 12),
-            Size = dim2(1, is_mobile and -50 or -66, 0, is_mobile and 16 or 18),
-            TextXAlignment = Enum.TextXAlignment.Left,
-            TextTruncate = Enum.TextTruncate.AtEnd,
+            Size = dim2(1, 0, 0, is_mobile and 60 or 80),
+            TextColor3 = themes.preset.accent,
             BorderSizePixel = 0,
-            TextSize = is_mobile and 12 or 14,
+            RichText = true,
+            TextSize = is_mobile and 24 or 42,
+            BackgroundColor3 = rgb(255, 255, 255),
         })
-
-        items[ "profile_subtitle" ] = library:create( "TextLabel" , {
-            FontFace = Font.fromEnum(Enum.Font.GothamMedium),
-            TextColor3 = rgb(140, 140, 140),
-            Text = "t.me/SaynoHub",
-            Parent = items[ "profile_frame" ],
-            BackgroundTransparency = 1,
-            Position = dim2(0, is_mobile and 46 or 58, 0, is_mobile and 25 or 30),
-            Size = dim2(1, is_mobile and -50 or -66, 0, is_mobile and 14 or 16),
-            TextXAlignment = Enum.TextXAlignment.Left,
-            TextTruncate = Enum.TextTruncate.AtEnd,
-            BorderSizePixel = 0,
-            TextSize = is_mobile and 9 or 11,
-        })
+        library:apply_theme(items[ "title" ], "accent", "TextColor3")
 
         items[ "multi_holder" ] = library:create( "Frame" , {
             Parent = items[ "main" ],
             Name = "\0",
             BackgroundTransparency = 1,
-            Position = dim2(0, is_mobile and 125 or 196, 0, 0),
+            Position = dim2(0, is_mobile and 115 or 196, 0, 0),
             BorderColor3 = rgb(0, 0, 0),
-            Size = dim2(1, is_mobile and -125 or -196, 0, is_mobile and 45 or 56),
+            Size = dim2(1, is_mobile and -115 or -196, 0, is_mobile and 50 or 56),
             BorderSizePixel = 0,
             BackgroundColor3 = rgb(255, 255, 255),
         })
@@ -839,7 +770,7 @@ function library:window(properties)
             Position = dim2(0, is_mobile and 6 or 10, 0.5, 0),
             AnchorPoint = vec2(0, 0.5),
             BorderColor3 = rgb(0, 0, 0),
-            Size = dim2(0, is_mobile and 140 or 190, 0, is_mobile and 26 or 30),
+            Size = dim2(0, is_mobile and 180 or 190, 0, is_mobile and 28 or 30),
             BorderSizePixel = 0,
             BackgroundColor3 = rgb(20, 20, 20),
             Visible = cfg.show_search,
@@ -964,9 +895,9 @@ function library:window(properties)
             BackgroundTransparency = 0,
             Visible = false,
             BorderColor3 = rgb(0, 0, 0),
-            Size = dim2(0, is_mobile and 250 or 300, 0, 0),
+            Size = dim2(0, is_mobile and 260 or 280, 0, 0),
             BorderSizePixel = 0,
-            BackgroundColor3 = rgb(18, 18, 18),
+            BackgroundColor3 = rgb(16, 16, 16),
             ZIndex = 150,
             ClipsDescendants = true,
         })
@@ -977,9 +908,16 @@ function library:window(properties)
         })
 
         library:create( "UIStroke" , {
-            Color = rgb(45, 45, 45),
+            Color = rgb(48, 48, 48),
             Parent = items[ "search_dropdown" ],
             ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+            Thickness = 1,
+        })
+
+        items[ "search_dropdown_gradient" ] = library:create( "UIGradient" , {
+            Color = rgbseq{rgbkey(0, rgb(22, 22, 22)), rgbkey(1, rgb(14, 14, 14))},
+            Rotation = 90,
+            Parent = items[ "search_dropdown" ],
         })
 
         items[ "search_results" ] = library:create( "ScrollingFrame" , {
@@ -997,6 +935,7 @@ function library:window(properties)
             BorderSizePixel = 0,
             CanvasSize = dim2(0, 0, 0, 0),
             ZIndex = 151,
+            ScrollBarImageTransparency = 0.3,
         })
 
         library:create( "UIListLayout" , {
@@ -1009,12 +948,25 @@ function library:window(properties)
             Parent = library[ "items" ],
             Name = "\0",
             Image = "rbxassetid://103166125443674",
-            BackgroundTransparency = 1,
+            BackgroundColor3 = rgb(15, 15, 15),
             Visible = false,
-            Size = dim2(0, 44, 0, 44),
+            Size = dim2(0, 54, 0, 54),
             Position = dim2(0, 20, 0, 20),
             ZIndex = 100,
+            AutoButtonColor = false,
         })
+        library:create( "UICorner" , {
+            Parent = items[ "hidden_icon" ],
+            CornerRadius = dim(0, 12),
+        })
+        library:create( "UIStroke" , {
+            Color = rgb(0, 0, 0),
+            Thickness = 2,
+            Transparency = 0.5,
+            Parent = items[ "hidden_icon" ],
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        })
+        items[ "hidden_icon_drag" ] = library:draggify(items[ "hidden_icon" ], {threshold = 8, close_on_drag = false})
 
         items[ "confirm_overlay" ] = library:create( "Frame" , {
             Parent = library[ "items" ],
@@ -1134,9 +1086,9 @@ function library:window(properties)
             Parent = items[ "main" ],
             Name = "\0",
             BackgroundTransparency = 1,
-            Position = dim2(0, is_mobile and 125 or 196, 0, is_mobile and 45 or 56),
+            Position = dim2(0, is_mobile and 115 or 196, 0, is_mobile and 50 or 56),
             BorderColor3 = rgb(0, 0, 0),
-            Size = dim2(1, is_mobile and -125 or -196, 1, is_mobile and -45 or -56),
+            Size = dim2(1, is_mobile and -115 or -196, 1, is_mobile and -50 or -56),
             BorderSizePixel = 0,
             BackgroundColor3 = rgb(10, 10, 10),
             ZIndex = 2,
@@ -1186,7 +1138,7 @@ function library:window(properties)
         end
 
         if query == "" then
-            items[ "search_dropdown" ].Size = dim2(0, is_mobile and 250 or 300, 0, 0)
+            items[ "search_dropdown" ].Size = dim2(0, is_mobile and 260 or 280, 0, 0)
             items[ "search_dropdown" ].Visible = false
             return
         end
@@ -1210,6 +1162,7 @@ function library:window(properties)
                     BorderSizePixel = 0,
                     BackgroundColor3 = rgb(24, 24, 24),
                     ZIndex = 152,
+                    ClipsDescendants = true,
                 })
 
                 library:create( "UICorner" , {
@@ -1221,30 +1174,18 @@ function library:window(properties)
                     Color = rgb(35, 35, 35),
                     Parent = btn,
                     ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-                })
-
-                local indicator = library:create( "Frame" , {
-                    Parent = btn,
-                    Name = "\0",
-                    BackgroundColor3 = themes.preset.accent,
-                    Position = dim2(0, 6, 0.5, -9),
-                    Size = dim2(0, 3, 0, 18),
-                    BorderSizePixel = 0,
-                    ZIndex = 153,
-                })
-                library:create( "UICorner" , {
-                    Parent = indicator,
-                    CornerRadius = dim(0, 999),
+                    Thickness = 1,
+                    Transparency = 0.5,
                 })
 
                 local title = library:create( "TextLabel" , {
-                    FontFace = fonts.font,
-                    TextColor3 = rgb(240, 240, 240),
+                    FontFace = fonts.small,
+                    TextColor3 = rgb(245, 245, 245),
                     Text = entry.display,
                     Parent = btn,
                     BackgroundTransparency = 1,
-                    Position = dim2(0, 16, 0, 3),
-                    Size = dim2(1, -24, 0, 16),
+                    Position = dim2(0, 10, 0, 3),
+                    Size = dim2(1, -20, 0, 16),
                     TextXAlignment = Enum.TextXAlignment.Left,
                     BorderSizePixel = 0,
                     TextSize = 13,
@@ -1253,29 +1194,47 @@ function library:window(properties)
 
                 local path = library:create( "TextLabel" , {
                     FontFace = fonts.small,
-                    TextColor3 = rgb(125, 125, 125),
+                    TextColor3 = rgb(110, 110, 110),
                     Text = entry.path,
                     Parent = btn,
                     BackgroundTransparency = 1,
-                    Position = dim2(0, 16, 0, 19),
-                    Size = dim2(1, -24, 0, 14),
+                    Position = dim2(0, 10, 0, 18),
+                    Size = dim2(1, -20, 0, 14),
                     TextXAlignment = Enum.TextXAlignment.Left,
                     BorderSizePixel = 0,
                     TextSize = 10,
                     ZIndex = 153,
                 })
 
-                btn.MouseEnter:Connect(function()
-                    library:tween(btn, {BackgroundColor3 = rgb(34, 34, 34)}, Enum.EasingStyle.Linear, 0.1)
-                    library:tween(btn_stroke, {Color = themes.preset.accent}, Enum.EasingStyle.Linear, 0.1)
-                    title.TextColor3 = themes.preset.accent
-                end)
+                local accent_bar = library:create( "Frame" , {
+                    Parent = btn,
+                    Name = "\0",
+                    AnchorPoint = vec2(0, 0.5),
+                    Position = dim2(0, 4, 0.5, 0),
+                    Size = dim2(0, 3, 0, 0),
+                    BorderSizePixel = 0,
+                    BackgroundColor3 = themes.preset.accent,
+                    BackgroundTransparency = 1,
+                    ZIndex = 153,
+                })
 
-                btn.MouseLeave:Connect(function()
-                    library:tween(btn, {BackgroundColor3 = rgb(24, 24, 24)}, Enum.EasingStyle.Linear, 0.1)
-                    library:tween(btn_stroke, {Color = rgb(35, 35, 35)}, Enum.EasingStyle.Linear, 0.1)
-                    title.TextColor3 = rgb(240, 240, 240)
-                end)
+                library:create( "UICorner" , {
+                    Parent = accent_bar,
+                    CornerRadius = dim(0, 999),
+                })
+
+                local function hover(state)
+                    local t = 0.18
+                    local style = Enum.EasingStyle.Quad
+                    library:tween(btn, {BackgroundColor3 = state and rgb(32, 32, 32) or rgb(24, 24, 24)}, style, t)
+                    library:tween(btn_stroke, {Transparency = 0.5, Color = state and themes.preset.accent or rgb(35, 35, 35)}, style, t)
+                    library:tween(title, {TextColor3 = state and rgb(255, 255, 255) or rgb(245, 245, 245), Position = dim2(0, state and 17 or 10, 0, 3)}, style, t)
+                    library:tween(path, {TextColor3 = state and rgb(150, 150, 150) or rgb(110, 110, 110), Position = dim2(0, state and 17 or 10, 0, 18)}, style, t)
+                    library:tween(accent_bar, {Size = dim2(0, 3, 0, state and 18 or 0), BackgroundTransparency = state and 0 or 1}, style, t)
+                end
+
+                btn.MouseEnter:Connect(function() hover(true) end)
+                btn.MouseLeave:Connect(function() hover(false) end)
 
                 btn.MouseButton1Click:Connect(function()
                     cfg.close_search()
@@ -1286,65 +1245,14 @@ function library:window(properties)
                         entry.page.open_page()
                     end
 
-                    task.wait(0.06)
+                    task.wait(0.05)
                     local el = entry.element
                     if el and el.Parent and entry.tab and entry.tab.items and entry.tab.items.tab_holder then
                         local scroll = entry.tab.items.tab_holder
                         local rel_y = el.AbsolutePosition.Y - scroll.AbsolutePosition.Y + scroll.CanvasPosition.Y
-                        library:tween(scroll, {CanvasPosition = vec2(0, max(0, rel_y - 50))}, Enum.EasingStyle.Quint, 0.45)
+                        library:tween(scroll, {CanvasPosition = vec2(0, max(0, rel_y - 40))}, Enum.EasingStyle.Quad, 0.3)
 
-                        local highlight_box = library:create("Frame", {
-                            Parent = el,
-                            Name = "\0",
-                            BackgroundColor3 = themes.preset.accent,
-                            BackgroundTransparency = 0.65,
-                            Size = dim2(1, 8, 1, 6),
-                            Position = dim2(0, -4, 0, -3),
-                            BorderSizePixel = 0,
-                            ZIndex = 40,
-                        })
-
-                        library:create("UICorner", {
-                            Parent = highlight_box,
-                            CornerRadius = dim(0, 6),
-                        })
-
-                        local glow_stroke = library:create("UIStroke", {
-                            Color = themes.preset.accent,
-                            Thickness = 2,
-                            Transparency = 0,
-                            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-                            Parent = highlight_box,
-                        })
-
-                        library:create("UIGradient", {
-                            Color = rgbseq{
-                                rgbkey(0, themes.preset.accent),
-                                rgbkey(0.5, rgb(255, 255, 255)),
-                                rgbkey(1, themes.preset.accent),
-                            },
-                            Transparency = numseq{
-                                numkey(0, 0.2),
-                                numkey(0.5, 0),
-                                numkey(1, 0.2),
-                            },
-                            Parent = highlight_box,
-                        })
-
-                        task.spawn(function()
-                            library:tween(highlight_box, {BackgroundTransparency = 0.35}, Enum.EasingStyle.Sine, 0.22)
-                            library:tween(glow_stroke, {Transparency = 0.3}, Enum.EasingStyle.Sine, 0.22)
-                            task.wait(0.22)
-                            library:tween(highlight_box, {BackgroundTransparency = 0.65}, Enum.EasingStyle.Sine, 0.22)
-                            library:tween(glow_stroke, {Transparency = 0}, Enum.EasingStyle.Sine, 0.22)
-                            task.wait(0.25)
-                            library:tween(highlight_box, {BackgroundTransparency = 1}, Enum.EasingStyle.Quad, 0.8)
-                            library:tween(glow_stroke, {Transparency = 1}, Enum.EasingStyle.Quad, 0.8)
-                            task.wait(0.85)
-                            if highlight_box and highlight_box.Parent then
-                                highlight_box:Destroy()
-                            end
-                        end)
+                        library:highlight(el)
                     end
                 end)
             end
@@ -1357,7 +1265,7 @@ function library:window(properties)
                 Text = "No results found",
                 Parent = items[ "search_results" ],
                 BackgroundTransparency = 1,
-                Size = dim2(1, 0, 0, 32),
+                Size = dim2(1, 0, 0, 30),
                 BorderSizePixel = 0,
                 TextSize = 12,
                 ZIndex = 153,
@@ -1365,8 +1273,8 @@ function library:window(properties)
         end
 
         cfg.open_search()
-        local content_height = min(matches > 0 and (matches * 41 + 14) or 44, 220)
-        items[ "search_dropdown" ].Size = dim2(0, is_mobile and 250 or 300, 0, content_height)
+        local content_height = min(matches > 0 and (matches * 41 + 12) or 42, 210)
+        items[ "search_dropdown" ].Size = dim2(0, is_mobile and 260 or 280, 0, content_height)
     end
 
     items[ "search_input" ]:GetPropertyChangedSignal("Text"):Connect(function()
@@ -1379,24 +1287,6 @@ function library:window(properties)
         cfg.close_search()
     end)
 
-    library:connection(uis.InputBegan, function(input)
-        if not items[ "search_dropdown" ].Visible then return end
-        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
-
-        local mouse_x = input.Position.X
-        local mouse_y = input.Position.Y
-
-        local drop = items[ "search_dropdown" ]
-        local hold = items[ "search_holder" ]
-
-        local in_drop = (mouse_x >= drop.AbsolutePosition.X and mouse_x <= drop.AbsolutePosition.X + drop.AbsoluteSize.X and mouse_y >= drop.AbsolutePosition.Y and mouse_y <= drop.AbsolutePosition.Y + drop.AbsoluteSize.Y)
-        local in_hold = (mouse_x >= hold.AbsolutePosition.X and mouse_x <= hold.AbsolutePosition.X + hold.AbsoluteSize.X and mouse_y >= hold.AbsolutePosition.Y and mouse_y <= hold.AbsolutePosition.Y + hold.AbsoluteSize.Y)
-
-        if not in_drop and not in_hold then
-            cfg.close_search()
-        end
-    end)
-
     items[ "minimize_button" ].MouseButton1Click:Connect(function()
         items[ "main" ].Visible = false
         items[ "hidden_icon" ].Visible = true
@@ -1404,7 +1294,9 @@ function library:window(properties)
         cfg.close_search()
     end)
 
-    items[ "hidden_icon" ].MouseButton1Click:Connect(function()
+    items[ "hidden_icon" ].Activated:Connect(function()
+        -- a drag must not be treated as a tap
+        if items[ "hidden_icon_drag" ].was_moved() then return end
         items[ "main" ].Visible = true
         items[ "hidden_icon" ].Visible = false
         library.hidden = false
@@ -1449,9 +1341,9 @@ function library:tab(properties)
             Name = "\0",
             Visible = false,
             BackgroundTransparency = 1,
-            Position = dim2(0, is_mobile and 125 or 196, 0, is_mobile and 45 or 56),
+            Position = dim2(0, is_mobile and 115 or 196, 0, is_mobile and 50 or 56),
             BorderColor3 = rgb(0, 0, 0),
-            Size = dim2(1, is_mobile and -125 or -196, 1, is_mobile and -45 or -56),
+            Size = dim2(1, is_mobile and -115 or -196, 1, is_mobile and -50 or -56),
             BorderSizePixel = 0,
             BackgroundColor3 = rgb(255, 255, 255),
             CanvasSize = dim2(0, 0, 0, 0),
@@ -1471,7 +1363,7 @@ function library:tab(properties)
             Name = "\0",
             Size = dim2(1, 0, 0, is_mobile and 28 or 35),
             BorderSizePixel = 0,
-            TextSize = is_mobile and 12 or 16,
+            TextSize = is_mobile and 11 or 16,
             BackgroundColor3 = rgb(29, 29, 29),
         })
 
@@ -1503,7 +1395,7 @@ function library:tab(properties)
             TextXAlignment = Enum.TextXAlignment.Left,
             BorderSizePixel = 0,
             AutomaticSize = Enum.AutomaticSize.X,
-            TextSize = is_mobile and 12 or 16,
+            TextSize = is_mobile and 11 or 16,
             BackgroundColor3 = rgb(255, 255, 255),
         })
 
@@ -1529,7 +1421,6 @@ function library:tab(properties)
             local data = {
                 items = {},
                 tab = cfg,
-                name = section,
                 current_row = nil,
                 current_row_cols = 0,
             }
@@ -1581,76 +1472,10 @@ function library:tab(properties)
                 data.page.Visible = true
                 cfg.current_multi = data
 
-                if cfg.refresh_subtabs then cfg.refresh_subtabs() end
-
                 library:close_element()
             end
 
             cfg.pages[#cfg.pages + 1] = setmetatable(data, library)
-        end
-
-        if #cfg.pages > 1 then
-            local sub_buttons = {}
-
-            for _, pg in ipairs(cfg.pages) do
-                local bar = library:create( "Frame" , {
-                    Parent = pg.page,
-                    Name = "\0",
-                    BackgroundTransparency = 1,
-                    BorderSizePixel = 0,
-                    LayoutOrder = -1000,
-                    Size = dim2(1, 0, 0, is_mobile and 26 or 30),
-                })
-
-                library:create( "UIListLayout" , {
-                    Parent = bar,
-                    FillDirection = Enum.FillDirection.Horizontal,
-                    Padding = dim(0, 6),
-                    SortOrder = Enum.SortOrder.LayoutOrder,
-                })
-
-                for idx, other in ipairs(cfg.pages) do
-                    local btn = library:create( "TextButton" , {
-                        Parent = bar,
-                        Name = "\0",
-                        LayoutOrder = idx,
-                        AutoButtonColor = false,
-                        FontFace = fonts.font,
-                        Text = tostring(other.name),
-                        TextSize = is_mobile and 12 or 14,
-                        TextColor3 = rgb(120, 120, 122),
-                        BackgroundColor3 = rgb(22, 22, 22),
-                        BorderSizePixel = 0,
-                        AutomaticSize = Enum.AutomaticSize.X,
-                        Size = dim2(0, 0, 1, 0),
-                    })
-
-                    library:create( "UIPadding" , {
-                        Parent = btn,
-                        PaddingLeft = dim(0, 12),
-                        PaddingRight = dim(0, 12),
-                    })
-
-                    library:create( "UICorner" , {
-                        Parent = btn,
-                        CornerRadius = dim(0, 6),
-                    })
-
-                    btn.MouseButton1Click:Connect(function()
-                        other.open_page()
-                    end)
-
-                    sub_buttons[#sub_buttons + 1] = {btn = btn, page = other}
-                end
-            end
-
-            function cfg.refresh_subtabs()
-                for _, b in ipairs(sub_buttons) do
-                    local active = (cfg.current_multi == b.page)
-                    b.btn.TextColor3 = active and rgb(255, 255, 255) or rgb(120, 120, 122)
-                    b.btn.BackgroundColor3 = active and rgb(38, 38, 40) or rgb(22, 22, 22)
-                end
-            end
         end
 
         if #cfg.pages > 0 then
@@ -1814,7 +1639,7 @@ end
 function library:section(properties)
     local parent_column = self.items and self.items[ "column" ]
     local tab = self.tab
-    local page = (self.items and self.items[ "tab" ]) and self or self.page or self
+    local page = self.page or self
 
     if not parent_column then
         local col = page:column({})
@@ -1843,7 +1668,7 @@ function library:section(properties)
             BorderColor3 = rgb(0, 0, 0),
             Size = dim2(1, 0, 0, 0),
             BorderSizePixel = 0,
-            BackgroundColor3 = rgb(18, 18, 18),
+            BackgroundColor3 = rgb(30, 30, 30),
             AutomaticSize = Enum.AutomaticSize.Y,
         })
 
@@ -1852,38 +1677,40 @@ function library:section(properties)
             CornerRadius = dim(0, 7),
         })
 
-        library:create( "UIStroke" , {
-            Color = rgb(30, 30, 30),
-            Parent = items[ "outline" ],
-            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-        })
-
-        items[ "button" ] = library:create( "TextButton" , {
-            FontFace = fonts.font,
-            TextColor3 = rgb(255, 255, 255),
-            BorderColor3 = rgb(0, 0, 0),
-            Text = "",
-            AutoButtonColor = false,
+        items[ "inline" ] = library:create( "Frame" , {
             Parent = items[ "outline" ],
             Name = "\0",
-            Position = dim2(0, 0, 0, 0),
-            Size = dim2(1, 0, 0, is_mobile and 30 or 35),
+            Position = dim2(0, 1, 0, 1),
+            BorderColor3 = rgb(0, 0, 0),
+            Size = dim2(1, -2, 1, -2),
             BorderSizePixel = 0,
-            TextSize = is_mobile and 12 or 16,
-            BackgroundColor3 = rgb(22, 22, 22),
+            BackgroundColor3 = rgb(18, 18, 18),
+            AutomaticSize = Enum.AutomaticSize.Y,
         })
 
         library:create( "UICorner" , {
-            Parent = items[ "button" ],
+            Parent = items[ "inline" ],
             CornerRadius = dim(0, 7),
+        })
+
+        items[ "scrolling" ] = library:create( "Frame" , {
+            Parent = items[ "inline" ],
+            Name = "\0",
+            Size = dim2(1, 0, 0, 0),
+            BackgroundTransparency = 1,
+            Position = dim2(0, 0, 0, is_mobile and 30 or 35),
+            BackgroundColor3 = rgb(255, 255, 255),
+            BorderColor3 = rgb(0, 0, 0),
+            BorderSizePixel = 0,
+            AutomaticSize = Enum.AutomaticSize.Y,
         })
 
         items[ "elements" ] = library:create( "Frame" , {
             BorderColor3 = rgb(0, 0, 0),
-            Parent = items[ "outline" ],
+            Parent = items[ "scrolling" ],
             Name = "\0",
             BackgroundTransparency = 1,
-            Position = dim2(0, is_mobile and 7 or 10, 0, is_mobile and 35 or 42),
+            Position = dim2(0, is_mobile and 7 or 10, 0, is_mobile and 7 or 10),
             Size = dim2(1, is_mobile and -14 or -20, 0, 0),
             BorderSizePixel = 0,
             AutomaticSize = Enum.AutomaticSize.Y,
@@ -1897,12 +1724,36 @@ function library:section(properties)
         })
 
         library:create( "UIPadding" , {
-            PaddingBottom = dim(0, is_mobile and 10 or 14),
+            PaddingBottom = dim(0, 15),
             Parent = items[ "elements" ],
         })
 
-        items[ "inline" ] = items[ "outline" ]
-        items[ "scrolling" ] = items[ "elements" ]
+        items[ "button" ] = library:create( "TextButton" , {
+            FontFace = fonts.font,
+            TextColor3 = rgb(255, 255, 255),
+            BorderColor3 = rgb(0, 0, 0),
+            Text = "",
+            AutoButtonColor = false,
+            Parent = items[ "outline" ],
+            Name = "\0",
+            Position = dim2(0, 1, 0, 1),
+            Size = dim2(1, -2, 0, is_mobile and 30 or 35),
+            BorderSizePixel = 0,
+            TextSize = is_mobile and 12 or 16,
+            BackgroundColor3 = rgb(22, 22, 22),
+        })
+
+        library:create( "UIStroke" , {
+            Color = rgb(30, 30, 30),
+            Parent = items[ "button" ],
+            Enabled = false,
+            ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+        })
+
+        library:create( "UICorner" , {
+            Parent = items[ "button" ],
+            CornerRadius = dim(0, 7),
+        })
 
         items[ "Icon" ] = library:create( "ImageLabel" , {
             ImageColor3 = themes.preset.accent,
@@ -1946,97 +1797,9 @@ function library:section(properties)
             BackgroundColor3 = rgb(45, 45, 45),
         })
 
-        if cfg.fading_toggle then
-            items[ "toggle" ] = library:create( "TextButton" , {
-                FontFace = fonts.small,
-                TextColor3 = rgb(0, 0, 0),
-                BorderColor3 = rgb(0, 0, 0),
-                AutoButtonColor = false,
-                Text = "",
-                AnchorPoint = vec2(1, 0.5),
-                Parent = items[ "button" ],
-                Name = "\0",
-                Position = dim2(1, -9, 0.5, 0),
-                Size = dim2(0, is_mobile and 30 or 36, 0, is_mobile and 15 or 18),
-                BorderSizePixel = 0,
-                TextSize = 14,
-                BackgroundColor3 = rgb(58, 58, 62),
-            })
-            library:apply_theme(items[ "toggle" ], "accent", "BackgroundColor3")
-
-            library:create( "UICorner" , {
-                Parent = items[ "toggle" ],
-                CornerRadius = dim(0, 999),
-            })
-
-            items[ "toggle_outline" ] = library:create( "Frame" , {
-                Parent = items[ "toggle" ],
-                Size = dim2(1, -2, 1, -2),
-                Name = "\0",
-                BorderMode = Enum.BorderMode.Inset,
-                BorderColor3 = rgb(0, 0, 0),
-                Position = dim2(0, 1, 0, 1),
-                BorderSizePixel = 0,
-                BackgroundColor3 = rgb(50, 50, 50),
-            })
-            library:apply_theme(items[ "toggle_outline" ], "accent", "BackgroundColor3")
-
-            library:create( "UICorner" , {
-                Parent = items[ "toggle_outline" ],
-                CornerRadius = dim(0, 999),
-            })
-
-            library:create( "UIGradient" , {
-                Color = rgbseq{rgbkey(0, rgb(211, 211, 211)), rgbkey(1, rgb(211, 211, 211))},
-                Parent = items[ "toggle_outline" ],
-            })
-
-            items[ "toggle_circle" ] = library:create( "Frame" , {
-                Parent = items[ "toggle_outline" ],
-                Name = "\0",
-                Position = dim2(0, 2, 0.5, 0),
-                AnchorPoint = vec2(0, 0.5),
-                BorderColor3 = rgb(0, 0, 0),
-                Size = dim2(0, is_mobile and 10 or 12, 0, is_mobile and 10 or 12),
-                BorderSizePixel = 0,
-                BackgroundColor3 = rgb(86, 86, 88),
-            })
-
-            library:create( "UICorner" , {
-                Parent = items[ "toggle_circle" ],
-                CornerRadius = dim(0, 999),
-            })
-
-            items[ "fade" ] = library:create( "Frame" , {
-                Parent = items[ "outline" ],
-                BackgroundTransparency = 1,
-                Name = "\0",
-                BorderColor3 = rgb(0, 0, 0),
-                Size = dim2(1, 0, 0, 0),
-                BorderSizePixel = 0,
-                BackgroundColor3 = rgb(0, 0, 0),
-                Visible = false,
-                ZIndex = 5,
-            })
-
-            library:create( "UICorner" , {
-                Parent = items[ "fade" ],
-                CornerRadius = dim(0, 7),
-            })
-
-            items[ "button" ].MouseButton1Click:Connect(function()
-                cfg.default = not cfg.default
-                cfg.toggle_section(cfg.default)
-            end)
-
-            function cfg.toggle_section(bool)
-                items[ "fade" ].Size = dim2(1, 0, 0, items[ "outline" ].AbsoluteSize.Y)
-                items[ "fade" ].Visible = not bool
-                library:tween(items[ "toggle" ], {BackgroundColor3 = bool and themes.preset.accent or rgb(58, 58, 62)}, Enum.EasingStyle.Quad)
-                library:tween(items[ "toggle_outline" ], {BackgroundColor3 = bool and themes.preset.accent or rgb(50, 50, 50)}, Enum.EasingStyle.Quad)
-                library:tween(items[ "toggle_circle" ], {BackgroundColor3 = bool and rgb(0, 0, 0) or rgb(86, 86, 88), Position = bool and dim2(1, -14, 0.5, 0) or dim2(0, 2, 0.5, 0)}, Enum.EasingStyle.Quad)
-                library:tween(items[ "fade" ], {BackgroundTransparency = bool and 1 or 0.8}, Enum.EasingStyle.Quad)
-            end
+        -- section header switch removed on purpose; kept as no-op so old calls don't break
+        function cfg.toggle_section(bool)
+            cfg.default = bool and true or false
         end
     end
 
@@ -2888,14 +2651,6 @@ function library:label(options)
     return setmetatable(cfg, library)
 end
 
-local function is_point_in_gui(obj, x, y, padding)
-    if not obj then return false end
-    padding = padding or 0
-    local pos = obj.AbsolutePosition
-    local size = obj.AbsoluteSize
-    return x >= (pos.X - padding) and x <= (pos.X + size.X + padding) and y >= (pos.Y - padding) and y <= (pos.Y + size.Y + padding)
-end
-
 function library:colorpicker(options)
     local cfg = {
         name = options.name or "Color",
@@ -3270,7 +3025,7 @@ function library:colorpicker(options)
 
     function cfg.update_color()
         local mouse_pos = uis:GetMouseLocation()
-        local offset = vec2(mouse_pos.X, mouse_pos.Y)
+        local offset = vec2(mouse_pos.X, mouse_pos.Y - gui_offset)
 
         if dragging_sat then
             s = clamp((offset - items["sat"].AbsolutePosition).X / items["sat"].AbsoluteSize.X, 0, 1)
@@ -3301,31 +3056,6 @@ function library:colorpicker(options)
             dragging_hue = false
             dragging_alpha = false
         end
-    end)
-
-    library:connection(uis.InputBegan, function(input)
-        if not cfg.open then return end
-        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
-        if dragging_sat or dragging_hue or dragging_alpha then return end
-
-        local mouse_x = input.Position.X
-        local mouse_y = input.Position.Y
-
-        local holder = items[ "colorpicker_holder" ]
-        local btn = items[ "colorpicker" ]
-
-        if not holder or not holder.Visible then return end
-
-        if is_point_in_gui(holder, mouse_x, mouse_y, 8) or is_point_in_gui(btn, mouse_x, mouse_y, 4) then
-            return
-        end
-
-        task.defer(function()
-            if not dragging_sat and not dragging_hue and not dragging_alpha and cfg.open then
-                cfg.open = false
-                cfg.set_visible(false)
-            end
-        end)
     end)
 
     items[ "alpha_gradient" ].MouseButton1Down:Connect(function()
@@ -4167,7 +3897,7 @@ function notifications:fade(path, is_fading)
     for _, instance in path:GetDescendants() do
         if not instance:IsA("GuiObject") then
             if instance:IsA("UIStroke") then
-                library:tween(instance, {Transparency = fading}, Enum.EasingStyle.Quad, 1)
+                library:tween(instance, {Transparency = is_fading and 1 or 0.5}, Enum.EasingStyle.Quad, 1)
             end
             continue
         end
@@ -4299,28 +4029,5 @@ function notifications:create_notification(options)
         items[ "notification" ]:Destroy()
     end)
 end
-
-library.Toggle = library.toggle
-library.Slider = library.slider
-library.Dropdown = library.dropdown
-library.Button = library.button
-library.Keybind = library.keybind
-library.Colorpicker = library.colorpicker
-library.ColorPicker = library.colorpicker
-library.Textbox = library.textbox
-library.TextBox = library.textbox
-library.Label = library.label
-library.List = library.list
-library.Section = library.section
-library.Column = library.column
-library.Tab = library.tab
-library.Window = library.window
-library.Seperator = library.seperator
-library.Separator = library.seperator
-
-library.Input = library.textbox
-library.input = library.textbox
-library.Sub_tab = library.sub_tab
-library.SubTab = library.sub_tab
 
 return library
