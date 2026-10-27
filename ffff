@@ -328,7 +328,7 @@ function library:draggify(frame, options)
     local drag_input = nil
     local moved = false
     local start = nil
-    local start_pos = frame.AbsolutePosition
+    local start_pos = frame.Position
 
     frame.Active = true
 
@@ -344,9 +344,9 @@ function library:draggify(frame, options)
         moved = false
         drag_input = input
         start = input.Position
-        -- Use the actual on-screen position so UDim2 scale components don't
-        -- get discarded when the drag starts (the hidden icon starts at Y scale 0.5).
-        start_pos = frame.AbsolutePosition
+        -- Keep the original UDim2 (including Scale) to prevent a jump
+        -- when dragging an element positioned with scale components.
+        start_pos = frame.Position
     end)
 
     library:connection(uis.InputEnded, function(input)
@@ -374,10 +374,22 @@ function library:draggify(frame, options)
         local viewport = camera.ViewportSize
         local size = frame.AbsoluteSize
 
-        frame.Position = dim2(
-            0, clamp(start_pos.X + delta.X, 0, max(viewport.X - size.X, 0)),
-            0, clamp(start_pos.Y + delta.Y, 0, max(viewport.Y - size.Y, 0))
+        -- Adjust only the offsets while preserving the original scale values.
+        -- Bounds account for Scale, so the icon stays on-screen as it moves.
+        local x_scale = start_pos.X.Scale
+        local y_scale = start_pos.Y.Scale
+        local x_offset = clamp(
+            start_pos.X.Offset + delta.X,
+            -viewport.X * x_scale,
+            viewport.X * (1 - x_scale) - size.X
         )
+        local y_offset = clamp(
+            start_pos.Y.Offset + delta.Y,
+            -viewport.Y * y_scale,
+            viewport.Y * (1 - y_scale) - size.Y
+        )
+
+        frame.Position = dim2(x_scale, x_offset, y_scale, y_offset)
     end)
 
     return {
