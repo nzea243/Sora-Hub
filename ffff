@@ -327,8 +327,8 @@ function library:draggify(frame, options)
     local dragging = false
     local drag_input = nil
     local moved = false
-    local start = nil
-    local start_pos = frame.Position
+    local start_pointer = nil
+    local start_absolute = nil
 
     frame.Active = true
 
@@ -343,10 +343,10 @@ function library:draggify(frame, options)
         dragging = true
         moved = false
         drag_input = input
-        start = input.Position
-        -- Keep the original UDim2 (including Scale) to prevent a jump
-        -- when dragging an element positioned with scale components.
-        start_pos = frame.Position
+        start_pointer = input.Position
+        -- Drag in absolute screen coordinates. The icon's initial Y Scale is 0.5;
+        -- mixing that Scale with Offset-based movement caused the vertical teleport.
+        start_absolute = frame.AbsolutePosition
     end)
 
     library:connection(uis.InputEnded, function(input)
@@ -354,42 +354,42 @@ function library:draggify(frame, options)
         if input == drag_input or (input.UserInputType == Enum.UserInputType.MouseButton1 and drag_input.UserInputType == Enum.UserInputType.MouseButton1) then
             dragging = false
             drag_input = nil
+            start_pointer = nil
+            start_absolute = nil
         end
     end)
 
     library:connection(uis.InputChanged, function(input)
-        if not dragging then return end
+        if not dragging or not start_pointer or not start_absolute then return end
 
         local is_mouse = input.UserInputType == Enum.UserInputType.MouseMovement
         local is_touch = input.UserInputType == Enum.UserInputType.Touch and input == drag_input
         if not (is_mouse or is_touch) then return end
 
-        local delta = input.Position - start
+        local delta = input.Position - start_pointer
         if not moved then
-            if vec2(delta.X, delta.Y).Magnitude < threshold then return end
+            if delta.Magnitude < threshold then return end
             moved = true
             if close_on_drag then library:close_element() end
         end
 
         local viewport = camera.ViewportSize
         local size = frame.AbsoluteSize
+        local x = clamp(start_absolute.X + delta.X, 0, max(viewport.X - size.X, 0))
+        local y = clamp(start_absolute.Y + delta.Y, 0, max(viewport.Y - size.Y, 0))
 
-        -- Adjust only the offsets while preserving the original scale values.
-        -- Bounds account for Scale, so the icon stays on-screen as it moves.
-        local x_scale = start_pos.X.Scale
-        local y_scale = start_pos.Y.Scale
-        local x_offset = clamp(
-            start_pos.X.Offset + delta.X,
-            -viewport.X * x_scale,
-            viewport.X * (1 - x_scale) - size.X
-        )
-        local y_offset = clamp(
-            start_pos.Y.Offset + delta.Y,
-            -viewport.Y * y_scale,
-            viewport.Y * (1 - y_scale) - size.Y
-        )
+        -- Convert the desired screen position to the parent's local Offset position.
+        -- This avoids mixing the original Scale (e.g. Y.Scale = 0.5) into drag math.
+        local parent = frame.Parent
+        if parent and parent:IsA("GuiObject") then
+            x = x - parent.AbsolutePosition.X + size.X * frame.AnchorPoint.X
+            y = y - parent.AbsolutePosition.Y + size.Y * frame.AnchorPoint.Y
+        else
+            x = x + size.X * frame.AnchorPoint.X
+            y = y + size.Y * frame.AnchorPoint.Y
+        end
 
-        frame.Position = dim2(x_scale, x_offset, y_scale, y_offset)
+        frame.Position = dim2(0, x, 0, y)
     end)
 
     return {
