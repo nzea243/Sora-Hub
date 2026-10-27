@@ -328,7 +328,7 @@ function library:draggify(frame, options)
     local drag_input = nil
     local moved = false
     local start = nil
-    local start_pos = nil
+    local start_pos = frame.AbsolutePosition
 
     frame.Active = true
 
@@ -344,8 +344,8 @@ function library:draggify(frame, options)
         moved = false
         drag_input = input
         start = input.Position
-        -- Берем реальные пиксельные координаты на экране (AbsolutePosition), 
-        -- чтобы элемент не телепортировался из-за Scale (например, 0.5 по Y)
+        -- Use the actual on-screen position so UDim2 scale components don't
+        -- get discarded when the drag starts (the hidden icon starts at Y scale 0.5).
         start_pos = frame.AbsolutePosition
     end)
 
@@ -369,20 +369,15 @@ function library:draggify(frame, options)
             if vec2(delta.X, delta.Y).Magnitude < threshold then return end
             moved = true
             if close_on_drag then library:close_element() end
-            -- Фиксируем точку старта в момент начала реального сдвига, чтобы не было скачка на длину threshold
-            start_pos = frame.AbsolutePosition
-            start = input.Position
-            delta = vec3(0, 0, 0)
         end
 
         local viewport = camera.ViewportSize
         local size = frame.AbsoluteSize
-        local anchor = frame.AnchorPoint
 
-        local new_x = clamp(start_pos.X + delta.X, 0, max(viewport.X - size.X, 0)) + (size.X * anchor.X)
-        local new_y = clamp(start_pos.Y + delta.Y, 0, max(viewport.Y - size.Y, 0)) + (size.Y * anchor.Y)
-
-        frame.Position = dim2(0, new_x, 0, new_y)
+        frame.Position = dim2(
+            0, clamp(start_pos.X + delta.X, 0, max(viewport.X - size.X, 0)),
+            0, clamp(start_pos.Y + delta.Y, 0, max(viewport.Y - size.Y, 0))
+        )
     end)
 
     return {
