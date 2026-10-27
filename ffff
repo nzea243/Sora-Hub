@@ -530,51 +530,57 @@ end
 function library:highlight(el)
     if not el or not el.Parent then return end
 
-    -- remove previous highlight on the same element
-    for _, child in el:GetChildren() do
-        if child:GetAttribute("sw_highlight") then
-            child:Destroy()
-        end
+    -- only one highlight at a time
+    if library._hl_cleanup then library._hl_cleanup() end
+
+    -- the row of the element (direct child of the section's elements frame)
+    local row = el
+    while row.Parent and not row.Parent:GetAttribute("sw_elements") do
+        if row.Parent == library[ "items" ] then break end
+        row = row.Parent
+    end
+    if not (row.Parent and row.Parent:GetAttribute("sw_elements")) then row = el end
+
+    -- the section frame: the highlight stretches to its edges
+    local section = row.Parent
+    while section and not section:GetAttribute("sw_section") do
+        section = section.Parent
     end
 
-    local corner = el:FindFirstChildOfClass("UICorner")
-    local radius = corner and corner.CornerRadius or dim(0, 6)
     local accent = themes.preset.accent
 
-    -- soft glow: lives in the ScreenGui (not inside the element) so it can't break
-    -- the element's UIListLayout, and follows the element while it is on screen
+    local function get_bounds()
+        local rp, rs = row.AbsolutePosition, row.AbsoluteSize
+        local x, w = rp.X, rs.X
+        if section and section.Parent then
+            x, w = section.AbsolutePosition.X, section.AbsoluteSize.X
+        end
+        -- inset 3px: the 2px stroke is drawn outside the frame and ends at the section border
+        return dim2(0, x + 3, 0, rp.Y - 2), dim2(0, max(w - 6, 0), 0, rs.Y + 4)
+    end
+
+    local pos, size = get_bounds()
     local glow = library:create("Frame", {
         Name = "\0",
         Parent = library[ "items" ],
-        Size = dim2(0, el.AbsoluteSize.X, 0, el.AbsoluteSize.Y),
-        Position = dim2(0, el.AbsolutePosition.X, 0, el.AbsolutePosition.Y),
+        Size = size,
+        Position = pos,
         BorderSizePixel = 0,
         BackgroundColor3 = accent,
         BackgroundTransparency = 1,
         ZIndex = 20,
         Active = false,
     })
-    library:create("UICorner", {Parent = glow, CornerRadius = radius})
+    library:create("UICorner", {Parent = glow, CornerRadius = dim(0, 6)})
 
-    local follow
-    follow = run.RenderStepped:Connect(function()
-        if not (el and el.Parent and glow and glow.Parent) then
-            if follow then follow:Disconnect() end
-            return
-        end
-        glow.Position = dim2(0, el.AbsolutePosition.X, 0, el.AbsolutePosition.Y)
-        glow.Size = dim2(0, el.AbsoluteSize.X, 0, el.AbsoluteSize.Y)
-    end)
-
-    -- animated border: gradient "beam" that runs around the outline
+    -- animated border: gradient "beam" running around the outline
     local stroke = library:create("UIStroke", {
         Color = accent,
         Thickness = 0,
         Transparency = 0.15,
         ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-        Parent = el,
+        Parent = glow,
     })
-    stroke:SetAttribute("sw_highlight", true)
 
     local beam = library:create("UIGradient", {
         Color = rgbseq{rgbkey(0, accent), rgbkey(0.5, rgb(255, 255, 255)), rgbkey(1, accent)},
@@ -583,31 +589,42 @@ function library:highlight(el)
         Parent = stroke,
     })
 
+    local alive = true
+    local follow
+    local function cleanup()
+        if not alive then return end
+        alive = false
+        if follow then follow:Disconnect() end
+        if glow then glow:Destroy() end
+        if library then library._hl_cleanup = nil end
+    end
+    library._hl_cleanup = cleanup
+
+    follow = run.RenderStepped:Connect(function()
+        if not (alive and row and row.Parent and glow and glow.Parent) then
+            cleanup()
+            return
+        end
+        glow.Position, glow.Size = get_bounds()
+    end)
+
     -- appear
     library:tween(stroke, {Thickness = 2}, Enum.EasingStyle.Quad, 0.2)
     library:tween(glow, {BackgroundTransparency = 0.86}, Enum.EasingStyle.Quad, 0.2)
     library:tween(beam, {Rotation = 360}, Enum.EasingStyle.Linear, 1.4)
 
-    -- pulse the glow once while the beam runs
     task.delay(0.35, function()
-        if glow and glow.Parent then
+        if alive and glow then
             library:tween(glow, {BackgroundTransparency = 0.94}, Enum.EasingStyle.Sine, 0.4)
         end
     end)
 
     -- disappear
     task.delay(1.4, function()
-        if stroke and stroke.Parent then
-            library:tween(stroke, {Transparency = 1, Thickness = 0}, Enum.EasingStyle.Quad, 0.4)
-        end
-        if glow and glow.Parent then
-            library:tween(glow, {BackgroundTransparency = 1}, Enum.EasingStyle.Quad, 0.4)
-        end
-        task.delay(0.45, function()
-            if follow then follow:Disconnect() end
-            if stroke then stroke:Destroy() end
-            if glow then glow:Destroy() end
-        end)
+        if not alive then return end
+        library:tween(stroke, {Transparency = 1, Thickness = 0}, Enum.EasingStyle.Quad, 0.4)
+        library:tween(glow, {BackgroundTransparency = 1}, Enum.EasingStyle.Quad, 0.4)
+        task.delay(0.45, cleanup)
     end)
 end
 
@@ -735,7 +752,7 @@ function library:window(properties)
             TextColor3 = themes.preset.accent,
             BorderSizePixel = 0,
             RichText = true,
-            TextSize = is_mobile and 24 or 42,
+            TextSize = is_mobile and 22 or 38,
             BackgroundColor3 = rgb(255, 255, 255),
         })
         library:apply_theme(items[ "title" ], "accent", "TextColor3")
@@ -950,19 +967,19 @@ function library:window(properties)
             Image = "rbxassetid://103166125443674",
             BackgroundColor3 = rgb(15, 15, 15),
             Visible = false,
-            Size = dim2(0, 54, 0, 54),
-            Position = dim2(0, 20, 0, 20),
+            Size = dim2(0, 46, 0, 46),
+            Position = dim2(0, 10, 0.5, -23),
             ZIndex = 100,
             AutoButtonColor = false,
         })
         library:create( "UICorner" , {
             Parent = items[ "hidden_icon" ],
-            CornerRadius = dim(0, 12),
+            CornerRadius = dim(0, 10),
         })
         library:create( "UIStroke" , {
             Color = rgb(0, 0, 0),
-            Thickness = 2,
-            Transparency = 0.5,
+            Thickness = 1.5,
+            Transparency = 0.8,
             Parent = items[ "hidden_icon" ],
             ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
         })
@@ -1289,7 +1306,10 @@ function library:window(properties)
 
     items[ "minimize_button" ].MouseButton1Click:Connect(function()
         items[ "main" ].Visible = false
-        items[ "hidden_icon" ].Visible = true
+        -- the icon always appears at the left edge, vertically centered
+        local icon = items[ "hidden_icon" ]
+        icon.Position = dim2(0, 10, 0, floor((library[ "items" ].AbsoluteSize.Y - icon.Size.Y.Offset) / 2))
+        icon.Visible = true
         library.hidden = true
         cfg.close_search()
     end)
@@ -1640,6 +1660,8 @@ function library:section(properties)
     local parent_column = self.items and self.items[ "column" ]
     local tab = self.tab
     local page = self.page or self
+    -- called directly on a page: self.page is the page's Frame, so use the page itself
+    if typeof(page) == "Instance" then page = self end
 
     if not parent_column then
         local col = page:column({})
@@ -1676,6 +1698,7 @@ function library:section(properties)
             Parent = items[ "outline" ],
             CornerRadius = dim(0, 7),
         })
+        items[ "outline" ]:SetAttribute("sw_section", true)
 
         items[ "inline" ] = library:create( "Frame" , {
             Parent = items[ "outline" ],
@@ -1716,6 +1739,8 @@ function library:section(properties)
             AutomaticSize = Enum.AutomaticSize.Y,
             BackgroundColor3 = rgb(255, 255, 255),
         })
+
+        items[ "elements" ]:SetAttribute("sw_elements", true)
 
         library:create( "UIListLayout" , {
             Parent = items[ "elements" ],
